@@ -1,0 +1,4 @@
+id,title,guidance,tier,function
+GOV-001,Establish Governance Framework,"Define roles, responsibilities, and reporting for cyber risk governance.",1,Govern
+ID-003,Asset Inventory Management,Maintain and update an inventory of physical and logical assets.,1,Identify
+PROT-012,Access Control Review,Implement least privilege and regularly review user access.,1,Protect
