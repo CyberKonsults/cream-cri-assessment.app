@@ -8,8 +8,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-//const supabase = createClient("https://iiqtmkqdfphslwbettxx.supabase.co", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpcXRta3FkZnBoc2x3YmV0dHh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk5MzQ0NDMsImV4cCI6MjA2NTUxMDQ0M30.Glc6eUxfQqEPw4yPtRXYIc1L7TqUyPYydbUP4cCbz74");
-
 function mockAIScore(response) {
   if (!response) return { score: 0, confidence: "Low" };
   if (response.includes("least privilege") || response.includes("inventory")) return { score: 3, confidence: "High" };
