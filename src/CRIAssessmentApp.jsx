@@ -13,147 +13,197 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-function mockAIScore(response) {
-  if (!response) return { score: 0, confidence: "Low" };
-  if (response.includes("least privilege") || response.includes("inventory")) return { score: 3, confidence: "High" };
-  if (response.length > 40) return { score: 2, confidence: "Medium" };
-  return { score: 1, confidence: "Low" };
-}
-
-function downloadCSV(data) {
-  const csvContent = "data:text/csv;charset=utf-8," +
-    ["Diagnostic ID,Title,Response,Confidence,Score,Evidence"]
-      .concat(data.map(item => `${item.id},${item.title},${item.response},${item.confidence},${item.score},${item.evidence}`))
-      .join("\n");
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute("download", "assessment_report.csv");
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-function downloadPDF(data) {
-  const doc = new jsPDF();
-  doc.text("CREAM Assessment Report", 14, 16);
-  autoTable(doc, {
-    head: [["ID", "Title", "Response", "Confidence", "Score", "Evidence"]],
-    body: data.map(item => [item.id, item.title, item.response, item.confidence, item.score, item.evidence])
-  });
-  doc.save("assessment_report.pdf");
-}
-
-export default function CRIAssessmentApp() {
+export default function CRIAssessmentPlatform() {
   const [diagnostics, setDiagnostics] = useState([]);
+  const [responseKeys, setResponseKeys] = useState([]);
   const [responses, setResponses] = useState({});
-  const [evidence, setEvidence] = useState({});
-  const [summaryData, setSummaryData] = useState([]);
-  const [showSummary, setShowSummary] = useState(false);
+  const [evidenceFiles, setEvidenceFiles] = useState({});
+  const [aiScores, setAiScores] = useState({});
+  const [currentPage, setCurrentPage] = useState(1);
+  const [tags, setTags] = useState([]);
+  const [selectedTag, setSelectedTag] = useState('');
+  const [tiers, setTiers] = useState([1, 2, 3, 4]);
+  const [selectedTiers, setSelectedTiers] = useState([1, 2, 3, 4]);
+  const itemsPerPage = 10;
 
   useEffect(() => {
-    const fetchDiagnostics = async () => {
-      const { data, error } = await supabase.from("diagnosticstatements").select("*");
-      if (data) setDiagnostics(data);
+    const fetchInitialData = async () => {
+      const [{ data: diags }, { data: rkeys }, { data: tagData }] = await Promise.all([
+        supabase.from("diagnosticstatements").select("*"),
+        supabase.from("response_keys").select("*").order("id", { ascending: true }),
+        supabase.from("tags").select("name")
+      ]);
+      setDiagnostics(diags || []);
+      setResponseKeys(rkeys || []);
+      setTags(tagData?.map(t => t.name) || []);
     };
-    fetchDiagnostics();
+    fetchInitialData();
   }, []);
 
-  const handleResponseChange = (id, value) => {
+  const handleResponseChange = async (id, value) => {
     setResponses((prev) => ({ ...prev, [id]: value }));
+    const ai = mockAIScore(value);
+    setAiScores((prev) => ({ ...prev, [id]: ai }));
+
+    await supabase.from("assessment_responses").upsert({
+      diagnostic_id: id,
+      response_text: value,
+      ai_score: ai.score,
+      ai_confidence: ai.confidence,
+      evidence_url: evidenceFiles[id] || null
+    });
   };
 
-  const handleFileUpload = async (id, file) => {
-    const { data, error } = await supabase.storage
-      .from("evidence")
-      .upload(`${id}/${file.name}`, file);
+  const handleEvidenceUpload = async (id, file) => {
+    if (!file) return;
+    const filePath = `${id}/${file.name}`;
+    const { error } = await supabase.storage.from("evidence").upload(filePath, file);
     if (!error) {
-      setEvidence((prev) => ({ ...prev, [id]: data.path }));
+      setEvidenceFiles((prev) => ({ ...prev, [id]: filePath }));
+      await supabase.from("assessment_responses").update({ evidence_url: filePath }).eq("diagnostic_id", id);
     }
   };
 
-  const handleGenerateReport = async () => {
-    const data = diagnostics.map((diag) => {
-      const response = responses[diag.id] || "Not answered";
-      const evd = evidence[diag.id] || "None";
-      const aiEval = mockAIScore(response);
-      return {
-        id: diag.id,
-        title: diag.title,
-        response,
-        confidence: aiEval.confidence,
-        score: aiEval.score,
-        evidence: evd
-      };
-    });
-    setSummaryData(data);
-    setShowSummary(true);
+  const mockAIScore = (text) => {
+    if (!text) return { score: 0, confidence: 'Low' };
+    if (text.includes("least privilege") || text.includes("inventory")) return { score: 3, confidence: "High" };
+    if (text.length > 40) return { score: 2, confidence: "Medium" };
+    return { score: 1, confidence: "Low" };
   };
 
-  return (
-    <div className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-3xl font-bold mb-4">CREAM AI Assessment Tool (CRI Profile v2.1)</h1>
-      <Tabs defaultValue="tier1" className="mb-4">
-        <TabsList>
-          <TabsTrigger value="tier1">Tier 1</TabsTrigger>
-          <TabsTrigger value="tier2">Tier 2</TabsTrigger>
-          <TabsTrigger value="tier3">Tier 3</TabsTrigger>
-        </TabsList>
-        <TabsContent value="tier1">
-          {diagnostics.filter(d => d.tier === 1).map((diag) => (
-            <Card key={diag.id} className="mb-4">
-              <CardContent className="p-4">
-                <h2 className="font-semibold text-xl mb-2">{diag.title}</h2>
-                <p className="text-sm text-gray-600 mb-2">{diag.guidance}</p>
-                <Textarea
-                  placeholder="Describe your control implementation or upload evidence link..."
-                  className="mb-2"
-                  onChange={(e) => handleResponseChange(diag.id, e.target.value)}
-                />
-                <Input
-                  type="file"
-                  onChange={(e) => handleFileUpload(diag.id, e.target.files[0])}
-                  className="mb-2"
-                />
-                <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => handleResponseChange(diag.id, "Yes")}>Yes</Button>
-                  <Button variant="outline" onClick={() => handleResponseChange(diag.id, "Partial")}>Partial</Button>
-                  <Button variant="outline" onClick={() => handleResponseChange(diag.id, "No")}>No</Button>
-                  <Button variant="secondary" onClick={() => handleResponseChange(diag.id, "Compensating")}>Compensating</Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </TabsContent>
-        <TabsContent value="tier2">
-          <p className="text-gray-500">Tier 2 diagnostics coming soon.</p>
-        </TabsContent>
-        <TabsContent value="tier3">
-          <p className="text-gray-500">Tier 3 diagnostics coming soon.</p>
-        </TabsContent>
-      </Tabs>
-      <Button className="mt-4" onClick={handleGenerateReport}>Generate Assessment Report</Button>
+  const handleGenerateSummary = () => {
+    alert("Assessment summary and AI scoring applied.");
+  };
 
-      {showSummary && (
-        <div className="mt-6 p-4 bg-gray-100 rounded-lg">
-          <h2 className="text-xl font-bold mb-4">AI-Powered Summary Report</h2>
-          <ul className="space-y-2">
-            {summaryData.map((item) => (
-              <li key={item.id}>
-                <strong>{item.id}</strong> — <em>{item.title}</em><br />
-                Response: {item.response}, Confidence: {item.confidence}, Score: {item.score}, Evidence: {item.evidence}
-              </li>
-            ))}
-          </ul>
-          <div className="flex gap-4 mt-4">
-            <Button onClick={() => downloadCSV(summaryData)}>Download CSV</Button>
-            <Button onClick={() => downloadPDF(summaryData)}>Download PDF</Button>
-          </div>
+  const handleGeneratePDF = () => {
+    const doc = new jsPDF();
+    const summary = diagnostics.map((d) => ([
+      d.profileid,
+      d.name,
+      responses[d.id] || "N/A",
+      aiScores[d.id]?.score ?? '-',
+      aiScores[d.id]?.confidence ?? '-',
+      evidenceFiles[d.id] || "None"
+    ]));
+    doc.text("CREAM Assessment Summary", 14, 16);
+    autoTable(doc, {
+      head: [["Profile ID", "Title", "Response", "Score", "Confidence", "Evidence"]],
+      body: summary
+    });
+    doc.save("assessment_summary.pdf");
+  };
+
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const filtered = diagnostics.filter(d => {
+    const matchTier = selectedTiers.some(t => d[`tier${t}`]);
+    const matchTag = selectedTag ? d.tags?.includes(selectedTag) : true;
+    return matchTier && matchTag;
+  });
+  const currentItems = filtered.slice(startIndex, startIndex + itemsPerPage);
+  const totalPages = Math.ceil(filtered.length / itemsPerPage);
+  const visiblePages = Array.from({ length: totalPages }, (_, i) => i + 1).slice(
+    Math.max(currentPage - 2, 0),
+    Math.min(currentPage + 2, totalPages)
+  );
+
+  return (
+    <div style={{ fontFamily: 'Segoe UI', padding: '2rem' }}>
+      <h1 style={{ textAlign: 'center', fontSize: '2rem', color: '#003366' }}>CREAM CRI Assessment Platform</h1>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+        <select value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
+          <option value=''>All Tags</option>
+          {tags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+        </select>
+        <div>
+          {tiers.map(t => (
+            <label key={t} style={{ marginRight: '1rem' }}>
+              <input
+                type="checkbox"
+                checked={selectedTiers.includes(t)}
+                onChange={() => setSelectedTiers(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])}
+              /> Tier {t}
+            </label>
+          ))}
         </div>
-      )}
+      </div>
+
+      {currentItems.map((item) => (
+        <div key={item.id} style={{ padding: '1rem', border: '1px solid #ccc', marginBottom: '1rem', borderRadius: '6px' }}>
+          <h3>{item.name} ({item.profileid})</h3>
+          <p><strong>Statement:</strong> {item.statementtext}</p>
+          <p><strong>Tier:</strong> {item.tier1 ? "1 " : ""}{item.tier2 ? "2 " : ""}{item.tier3 ? "3 " : ""}{item.tier4 ? "4" : ""}</p>
+          <p><strong>Response Guidance:</strong> {item.responseguidance}</p>
+          <p><strong>EEE Package:</strong> {item.eeepackages}</p>
+          <p><strong>Tags:</strong> {item.tags}</p>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {responseKeys.map(({ id, label, description }) => (
+              <button
+                key={id}
+                onClick={() => handleResponseChange(item.id, label)}
+                style={{
+                  backgroundColor: responses[item.id] === label ? '#005288' : '#eee',
+                  color: responses[item.id] === label ? 'white' : '#333',
+                  border: 'none',
+                  padding: '0.5rem 1rem',
+                  borderRadius: '4px'
+                }}
+                title={description || label}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            placeholder="Enter assessment rationale..."
+            onChange={(e) => handleResponseChange(item.id, e.target.value)}
+            style={{ width: '100%', height: '3rem', marginTop: '0.5rem' }}
+          />
+
+          <input
+            type="file"
+            onChange={(e) => handleEvidenceUpload(item.id, e.target.files[0])}
+            style={{ marginTop: '0.5rem' }}
+            title="Upload supporting evidence for this diagnostic"
+          />
+          {evidenceFiles[item.id] && <p><em>Uploaded: {evidenceFiles[item.id]}</em></p>}
+        </div>
+      ))}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '2rem 0', gap: '0.5rem' }}>
+        {visiblePages.map((page) => (
+          <button
+            key={page}
+            onClick={() => setCurrentPage(page)}
+            style={{
+              backgroundColor: currentPage === page ? '#005288' : '#d0d7de',
+              color: currentPage === page ? '#fff' : '#003366',
+              border: 'none',
+              padding: '0.5rem 1rem',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+            title={`Go to page ${page}`}
+          >
+            {page}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+        <button onClick={handleGenerateSummary} style={{ backgroundColor: '#003366', color: 'white', padding: '0.75rem 1.5rem', marginRight: '1rem', borderRadius: '4px' }}>
+          Generate Report Summary
+        </button>
+        <button onClick={handleGeneratePDF} style={{ backgroundColor: '#005288', color: 'white', padding: '0.75rem 1.5rem', borderRadius: '4px' }}>
+          Download Report
+        </button>
+      </div>
     </div>
   );
 }
+
 
 // Place your previously generated component code here...
 // For this demonstration, you can copy the content from your working file.
