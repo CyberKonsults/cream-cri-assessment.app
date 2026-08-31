@@ -1,0 +1,16 @@
+#!/bin/sh
+# Block the GitHub private email that GH007 rejects on push.
+blocked="tunjitaiwo@cyberkonsults.com"
+noreply="66530516+iamtunji@users.noreply.github.com"
+email=$(git config --get user.email 2>/dev/null || true)
+author=${GIT_AUTHOR_EMAIL:-$email}
+committer=${GIT_COMMITTER_EMAIL:-$email}
+
+for candidate in "$email" "$author" "$committer"; do
+  if [ "$candidate" = "$blocked" ]; then
+    echo "commit blocked: $blocked trips GitHub GH007 on push."
+    echo "this repo expects $noreply"
+    echo "run: sh scripts/setup-git-author.sh"
+    exit 1
+  fi
+done
